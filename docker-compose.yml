@@ -1,0 +1,21 @@
+services:
+  shopper:
+    build: .
+    image: shopper:latest
+    container_name: shopper
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      RUN_MODE: docker
+      HEADLESS: 'false'
+      NOVNC_URL: ${NOVNC_URL:-http://127.0.0.1:6080/vnc.html}
+    ports:
+      # IMPORTANT: bound to localhost only by default. To expose externally
+      # (phone, laptop on the LAN), front this with Caddy/Tailscale/Cloudflare-Tunnel
+      # AND set NOVNC_PASSWORD in .env so x11vnc enforces auth.
+      - "127.0.0.1:6080:6080"
+    volumes:
+      - ./auth:/app/auth
+      - ./state:/app/state
+      - ./traces:/app/traces
+    shm_size: '1gb'

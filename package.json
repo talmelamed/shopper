@@ -1,0 +1,41 @@
+{
+  "name": "shopper",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Telegram-driven shopping agent that drives shufersal.co.il via Playwright",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "NODE_EXTRA_CA_CERTS=/Users/tal.melamed/Project/Private/shopper/corp-ca.pem tsx watch src/index.ts",
+    "start": "NODE_EXTRA_CA_CERTS=/Users/tal.melamed/Project/Private/shopper/corp-ca.pem node --import tsx/esm src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "playwright:install": "playwright install chromium --with-deps"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "openai": "^6.38.0",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0",
+    "playwright": "1.48.2",
+    "telegraf": "^4.16.3",
+    "ulid": "^2.3.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.10",
+    "@typescript-eslint/eslint-plugin": "^8.8.0",
+    "@typescript-eslint/parser": "^8.8.0",
+    "eslint": "^9.12.0",
+    "prettier": "^3.3.3",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.2"
+  }
+}
