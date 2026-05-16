@@ -1,7 +1,6 @@
 import { chromium, type BrowserContext, type Page } from 'playwright';
-import { mkdir } from 'node:fs/promises';
-import { chmod } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, chmod, rm } from 'node:fs/promises';
+import { resolve, join } from 'node:path';
 import { config } from '../config.js';
 import { logger } from '../util/logger.js';
 
@@ -23,6 +22,11 @@ export async function startBrowser(): Promise<{ context: BrowserContext; page: P
   if (_context && _page) return { context: _context, page: _page };
 
   const userDataDir = await ensureProfileDir();
+
+  // Remove stale Chromium singleton lock files so restarts never deadlock
+  for (const f of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+    await rm(join(userDataDir, f), { force: true }).catch(() => {});
+  }
   const headless = config.RUN_MODE === 'local' ? config.HEADLESS : false;
 
   logger.info({ runMode: config.RUN_MODE, headless, userDataDir }, 'browser.starting');

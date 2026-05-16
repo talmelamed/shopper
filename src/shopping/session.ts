@@ -31,6 +31,11 @@ export interface PendingCartEdit {
   name: string;
 }
 
+export interface PendingLogin {
+  step: 'email' | 'password';
+  email?: string;
+}
+
 export interface ChatSession {
   v: typeof SESSION_SCHEMA_VERSION;
   chatId: number;
@@ -43,6 +48,7 @@ export interface ChatSession {
   pendingPick?: PendingPick;
   pendingCustomQty?: PendingCustomQty;
   pendingCartEdit?: PendingCartEdit;
+  pendingLogin?: PendingLogin;
 }
 
 export function newSession(chatId: number): ChatSession {

@@ -35,6 +35,9 @@ const schema = z.object({
 
   OPENAI_API_KEY: z.string().optional().default(''),
   OPENAI_MODEL: z.string().default('gpt-4o-mini'),
+
+  SHUFERSAL_EMAIL: z.string().optional().default(''),
+  SHUFERSAL_PASSWORD: z.string().optional().default(''),
 });
 
 export type AppConfig = z.infer<typeof schema>;

@@ -95,69 +95,101 @@ export async function getCartBadgeCount(): Promise<number> {
   }
 }
 
-const memCart = new Map<string, CartLine>();
-
-export async function setQty(skuOrName: string | number, qty: number): Promise<CartSnapshot> {
+export async function setQty(skuOrName: string, qty: number): Promise<void> {
   return browserQueue.enqueue(`cart.set:${skuOrName}=${qty}`, async () => {
-    const line = resolveMemLine(skuOrName);
-    if (!line) return memSnapshot();
-
-    // Update real Shufersal cart via Playwright
     const page = getPage();
-    const searchUrl = `${config.SHUFERSAL_URL}/online/he/search?text=${encodeURIComponent(line.name)}`;
-    logger.info({ sku: line.sku, qty }, 'cart.setQty.start');
+    logger.info({ skuOrName, qty }, 'cart.setQty.start');
 
-    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-    try {
-      await page.waitForSelector(sel.search.tile, { timeout: 10_000 });
-    } catch {
-      logger.warn({ sku: line.sku }, 'cart.setQty.no_tiles');
+    // Navigate to cart only if not already there
+    if (!page.url().includes('/cart/')) {
+      await page.goto(
+        `${config.SHUFERSAL_URL}/online/he/cart/cartsummary`,
+        { waitUntil: 'domcontentloaded', timeout: 30_000 },
+      );
+      await page
+        .waitForSelector(`${sel.cart.line}, .emptyCart, .empty-cart`, { timeout: 12_000 })
+        .catch(() => {});
     }
 
-    const tileSel = sel.tile.bySkuAttr(line.sku);
-    const tile = page.locator(tileSel).first();
-
+    // Resolve SKU: try direct match first, then fuzzy name search
+    let sku = skuOrName;
+    let articleSel = `${sel.cart.line}[data-product-code="${sku}"]`;
+    if ((await page.locator(articleSel).count()) === 0) {
+      const resolved = await resolveSkuByName(page, skuOrName);
+      if (resolved) {
+        sku = resolved;
+        articleSel = `${sel.cart.line}[data-product-code="${sku}"]`;
+      }
+    }
+    const tile = page.locator(articleSel).first();
     if ((await tile.count()) === 0) {
-      logger.warn({ sku: line.sku }, 'cart.setQty.tile_not_found');
-    } else {
-      const qtyInput = tile.locator(sel.tile.qtyInput).first();
-      if ((await qtyInput.count()) > 0) {
-        await qtyInput.fill(String(qty <= 0 ? 0 : qty));
-      }
-
-      const updateBtn = tile.locator(sel.tile.updateBtn).first();
-      const addBtn = tile.locator(sel.tile.addBtn).first();
-
-      if (qty <= 0) {
-        // Try dedicated remove button first, then set qty=0 and update
-        const removeBtn = tile.locator(sel.tile.removeBtn).first();
-        if ((await removeBtn.count()) > 0 && (await removeBtn.isVisible())) {
-          await removeBtn.click();
-        } else if ((await updateBtn.count()) > 0 && (await updateBtn.isVisible())) {
-          await updateBtn.click();
-        }
-      } else {
-        const updateVisible = await updateBtn.isVisible().catch(() => false);
-        if (updateVisible) {
-          await updateBtn.click();
-        } else {
-          const addVisible = await addBtn.isVisible().catch(() => false);
-          if (addVisible) await addBtn.click();
-        }
-      }
-      await page.waitForTimeout(1500);
+      logger.warn({ skuOrName }, 'cart.setQty.tile_not_found');
+      return;
     }
 
-    // Sync memory mirror
-    if (qty <= 0) memCart.delete(line.sku);
-    else memCart.set(line.sku, { ...line, qty });
+    const targetQty = qty <= 0 ? 0 : qty;
 
-    logger.info({ sku: line.sku, qty }, 'cart.setQty.done');
-    return memSnapshot();
+    // Remove: click the dedicated remove button when qty is 0
+    if (targetQty === 0) {
+      const removeBtn = tile.locator(`${sel.tile.removeBtn}, ${sel.cart.lineRemove}`).first();
+      if ((await removeBtn.count()) > 0 && (await removeBtn.isVisible().catch(() => false))) {
+        await removeBtn.click();
+        await page.waitForTimeout(1500);
+        logger.info({ skuOrName }, 'cart.setQty.removed');
+        return;
+      }
+    }
+
+    // Step 1: scroll item into view and click the qty input using page.evaluate
+    // We dispatch native events so that Shufersal's own JS handlers fire correctly.
+    const inputFound = await page.evaluate(
+      ({ articleSel: sel, newQty }) => {
+        const article = document.querySelector(sel);
+        if (!article) return false;
+        const input = article.querySelector<HTMLInputElement>(
+          'input.js-qty-selector-input, input[class*="qty-selector"], input[type="number"]',
+        );
+        if (!input) return false;
+        article.scrollIntoView({ block: 'center' });
+        input.focus();
+        // Use native value setter so React/Angular listeners detect the change
+        const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+        nativeSetter?.call(input, String(newQty));
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        // Dispatch Enter key events to trigger Shufersal's "confirm" logic
+        const enterOpts: KeyboardEventInit = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true };
+        input.dispatchEvent(new KeyboardEvent('keydown', enterOpts));
+        input.dispatchEvent(new KeyboardEvent('keypress', enterOpts));
+        input.dispatchEvent(new KeyboardEvent('keyup', enterOpts));
+        return true;
+      },
+      { articleSel, newQty: targetQty },
+    );
+
+    if (!inputFound) {
+      logger.warn({ skuOrName }, 'cart.setQty.input_not_found_in_dom');
+      return;
+    }
+
+    // Step 2: wait for the "עדכון" / js-update-cart button to appear and click it
+    const updateBtnSel = 'button.js-update-cart, button:has-text("עדכון")';
+    const updateBtn = tile.locator(updateBtnSel).first();
+    try {
+      await updateBtn.waitFor({ state: 'visible', timeout: 4_000 });
+      await updateBtn.click();
+      logger.info({ skuOrName, targetQty }, 'cart.setQty.confirmed_via_update_btn');
+    } catch {
+      // The update may have already been committed via Enter key
+      logger.info({ skuOrName, targetQty }, 'cart.setQty.confirmed_via_enter');
+    }
+
+    await page.waitForTimeout(800);
+    logger.info({ skuOrName, targetQty }, 'cart.setQty.done');
   });
 }
 
-export async function removeFromCart(skuOrName: string | number): Promise<CartSnapshot> {
+export async function removeFromCart(skuOrName: string): Promise<void> {
   return setQty(skuOrName, 0);
 }
 
@@ -191,8 +223,7 @@ export async function clearCart(): Promise<CartSnapshot> {
       logger.info({ removed }, 'cart.clear.done_via_remove');
     }
 
-    memCart.clear();
-    return memSnapshot();
+    return { lines: [], total: 0, itemCount: 0 };
   });
 }
 
@@ -270,12 +301,6 @@ export async function getCart(): Promise<CartSnapshot> {
       },
     );
 
-    // Sync in-memory mirror so /update commands work
-    memCart.clear();
-    for (const l of result.lines) {
-      if (l.sku) memCart.set(l.sku, l as CartLine);
-    }
-
     const lines: CartLine[] = result.lines.map((l) => ({
       sku: l.sku,
       name: l.name,
@@ -289,28 +314,18 @@ export async function getCart(): Promise<CartSnapshot> {
   });
 }
 
-export function recordCartAdd(product: Product, qty: number): void {
-  const existing = memCart.get(product.sku);
-  const newQty = (existing?.qty ?? 0) + qty;
-  memCart.set(product.sku, {
-    sku: product.sku,
-    name: product.name,
-    brand: product.brand,
-    price: product.price,
-    qty: newQty,
-    imageUrl: product.imageUrl,
-  });
-}
 
-function memSnapshot(): CartSnapshot {
-  const lines = Array.from(memCart.values());
-  const total = lines.reduce((s, l) => s + l.price * l.qty, 0);
-  return { lines, total: Math.round(total * 100) / 100, itemCount: lines.length };
-}
-
-function resolveMemLine(key: string | number): CartLine | undefined {
-  if (typeof key === 'number') return Array.from(memCart.values())[key - 1];
-  return memCart.get(key) ?? Array.from(memCart.values()).find(
-    (l) => l.name.toLowerCase().includes(String(key).toLowerCase()),
-  );
+/** Scans the current cart page DOM to find a SKU by fuzzy product name match. */
+async function resolveSkuByName(page: import('playwright').Page, name: string): Promise<string | null> {
+  const articles = page.locator(sel.cart.line);
+  const count = await articles.count();
+  const lowerName = name.toLowerCase();
+  for (let i = 0; i < count; i++) {
+    const article = articles.nth(i);
+    const articleName = ((await article.locator(sel.cart.lineName).textContent().catch(() => '')) ?? '').toLowerCase();
+    if (articleName.includes(lowerName)) {
+      return await article.getAttribute('data-product-code') ?? null;
+    }
+  }
+  return null;
 }

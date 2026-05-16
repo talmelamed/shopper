@@ -27,6 +27,7 @@ export const sel = {
     qtyInput: 'input.js-qty-selector-input',
     addBtn: 'button.js-add-to-cart',
     updateBtn: 'button.js-update-cart',
+    saveBtn: 'button:has-text("עדכון"), a.js-add-to-cart, a:has-text("הוסף וחסוך"), button:has-text("הוסף וחסוך"), .js-update-quantity',
     removeBtn: 'button.js-remove-from-cart, .miglog-prod-remove',
   },
   cart: {
@@ -44,6 +45,10 @@ export const sel = {
     loginButton: '.js-login, a[href*="login"]',
     userIndicator: '.user-info, .js-logged-in-marker',
     loginForm: 'form[action*="login"]',
+    loginPageUrl: 'https://www.shufersal.co.il/online/he/login',
+    emailInput: 'input[name="username"], input[name="email"], input[type="email"], #username, #j_username',
+    passwordInput: 'input[name="password"], input[type="password"], #password, #j_password',
+    submitButton: 'button[type="submit"], .js-login-btn, input[type="submit"], button.login-btn',
   },
   history: {
     ordersLink: 'a[href*="orders"]',

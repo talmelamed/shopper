@@ -1,6 +1,7 @@
 import { config } from './config.js';
 import { logger } from './util/logger.js';
 import { startBrowser, stopBrowser } from './shufersal/browser.js';
+import { isLoggedIn, loginWithCredentials } from './shufersal/session.js';
 import { buildBot } from './telegram/bot.js';
 
 async function main(): Promise<void> {
@@ -14,6 +15,23 @@ async function main(): Promise<void> {
   );
 
   await startBrowser();
+
+  // Auto-login on startup if credentials are configured and session is not live
+  if (config.SHUFERSAL_EMAIL && config.SHUFERSAL_PASSWORD) {
+    const alreadyLoggedIn = await isLoggedIn().catch(() => false);
+    if (alreadyLoggedIn) {
+      logger.info('autologin.skipped — session already active');
+    } else {
+      logger.info({ email: config.SHUFERSAL_EMAIL }, 'autologin.start');
+      const result = await loginWithCredentials(config.SHUFERSAL_EMAIL, config.SHUFERSAL_PASSWORD);
+      if (result.ok) {
+        logger.info('autologin.success');
+      } else {
+        logger.warn({ reason: result.reason }, 'autologin.failed — use /login to retry manually');
+      }
+    }
+  }
+
   const bot = buildBot();
 
   const shutdown = async (signal: string) => {

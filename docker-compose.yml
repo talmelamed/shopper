@@ -4,6 +4,7 @@ services:
     image: shopper:latest
     container_name: shopper
     restart: unless-stopped
+    stop_grace_period: 30s
     env_file: .env
     environment:
       RUN_MODE: docker
