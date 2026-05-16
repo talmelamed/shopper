@@ -1,0 +1,7 @@
+2026/05/16-23:10:09.452 3e03 Reusing MANIFEST /Users/tal.melamed/Project/Private/shopper/auth-ramilevy/Default/Local Storage/leveldb/MANIFEST-000001
+2026/05/16-23:10:09.455 3e03 Recovering log #4
+2026/05/16-23:10:09.456 3e03 Level-0 table #7: started
+2026/05/16-23:10:09.462 3e03 Level-0 table #7: 111606 bytes OK
+2026/05/16-23:10:09.471 3e03 Delete type=0 #4
+2026/05/16-23:11:04.274 3b03 Level-0 table #10: started
+2026/05/16-23:11:04.301 3b03 Level-0 table #10: 110961 bytes OK

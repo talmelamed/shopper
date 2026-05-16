@@ -7,16 +7,9 @@ import { stateStore } from '../state/store.js';
 import { newSession, type ChatSession, type PendingCustomQty, type PendingCartEdit, type PendingLogin, defaultSettings } from '../shopping/session.js';
 import { smartParseShoppingList } from '../llm/parser.js';
 import { llmRankResults } from '../llm/ranker.js';
-import { search } from '../shufersal/search.js';
-import {
-  addToCart,
-  getCart,
-  getCartBadgeCount,
-  removeFromCart,
-  setQty,
-  clearCart,
-} from '../shufersal/cart.js';
-import { isLoggedIn, loginWithCredentials } from '../shufersal/session.js';
+import { getAdapter, STORE_NAMES, type StoreName } from '../store/adapter.js';
+import { loginWithCredentials as rlLoginWithCredentials } from '../ramilevy/session.js';
+import { loginWithCredentials as sfLoginWithCredentials } from '../shufersal/session.js';
 import { isLlmEnabled } from '../llm/client.js';
 import { browserQueue } from '../util/queue.js';
 import type { Product, SearchResultBundle, ShoppingItem } from '../shopping/types.js';
@@ -47,16 +40,35 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
   });
 
   bot.command('status', async (ctx) => {
-    const loggedIn = await isLoggedIn().catch(() => false);
+    const chatId = ctx.chat.id;
+    const session = await stateStore.get(chatId);
+    const adapter = getAdapter(session.store);
+    const loggedIn = await adapter.isLoggedIn().catch(() => false);
     const depth = browserQueue.depth;
     await ctx.replyWithHTML(
       [
         `🩺 <b>סטטוס:</b>`,
-        `• מחובר לשופרסל: ${loggedIn ? '✅' : '❌'}`,
+        `• חנות פעילה: ${STORE_NAMES[session.store ?? 'shufersal']}`,
+        `• מחובר לחנות: ${loggedIn ? '✅' : '❌'}`,
         `• פעולות בתור: <code>${depth}</code>`,
         `• מצב ריצה: <code>${config.RUN_MODE}</code>`,
         `• OpenAI: ${isLlmEnabled() ? `✅ <code>${config.OPENAI_MODEL}</code>` : '❌ (regex fallback)'}`,
       ].join('\n'),
+    );
+  });
+
+  bot.command('store', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const session = await stateStore.get(chatId);
+    const current = session.store ?? 'shufersal';
+    await ctx.replyWithHTML(
+      `🏪 <b>בחר חנות לקניות</b>\nחנות נוכחית: ${STORE_NAMES[current]}`,
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback(`${current === 'shufersal' ? '✅ ' : ''}🟠 שופרסל`, 'store_shufersal'),
+          Markup.button.callback(`${current === 'ramilevy' ? '✅ ' : ''}🔵 רמי לוי`, 'store_ramilevy'),
+        ],
+      ]),
     );
   });
 
@@ -90,8 +102,11 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
   });
 
   bot.command('login', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const session = await stateStore.get(chatId);
+    const storeName = STORE_NAMES[session.store ?? 'shufersal'];
     await ctx.replyWithHTML(
-      '🔐 <b>התחברות לשופרסל</b>\n\nבחר שיטת התחברות:',
+      `🔐 <b>התחברות ל${storeName}</b>\n\nבחר שיטת התחברות:`,
       Markup.inlineKeyboard([
         [Markup.button.callback('📧 מייל וסיסמא', 'login_credentials')],
         [Markup.button.callback('🖥 דפדפן ידני (noVNC)', 'login_novnc')],
@@ -100,9 +115,12 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
   });
 
   bot.command('cart', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const session = await stateStore.get(chatId);
+    const adapter = getAdapter(session.store);
     const withPhotos = ctx.message.text.includes('תמונות');
     await ctx.reply('🛒 שולח בקשת עגלה לשרת...');
-    const cart = await getCart();
+    const cart = await adapter.getCart();
     if (withPhotos && cart.lines.length > 0) {
       const media: InputMediaPhoto[] = cart.lines.slice(0, 10).map((l, i) => ({
         type: 'photo',
@@ -119,6 +137,9 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
   });
 
   bot.command('update', async (ctx) => {
+    const chatId = ctx.chat.id;
+    const session = await stateStore.get(chatId);
+    const adapter = getAdapter(session.store);
     const args = ctx.message.text.replace(/^\/update(@\S+)?\s*/, '').trim();
     if (!args) {
       await ctx.reply('שימוש: /update <qty> <name> או /update #<idx> <qty>');
@@ -128,20 +149,20 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
     if (cartRefMatch) {
       const idx = Number(cartRefMatch[1]);
       const qty = Number(cartRefMatch[2]);
-      const before = await getCart();
+      const before = await adapter.getCart();
       const target = before.lines[idx - 1];
       if (!target) {
         await ctx.reply(`לא נמצא פריט #${idx} בעגלה.`);
         return;
       }
       if (qty === 0) await ctx.reply(`🗑 מסיר "${target.name}" מהעגלה...`);
-      await setQty(target.sku, qty);
+      await adapter.setQty(target.sku, qty);
       await ctx.replyWithHTML(
         qty === 0
           ? `✅ "${target.name}" הוסר מהעגלה.`
           : `✅ עודכן: "${target.name}" → x${qty}`,
       );
-      logger.info({ chatId: ctx.chat.id, sku: target.sku, qty }, 'cart.updated');
+      logger.info({ chatId, sku: target.sku, qty }, 'cart.updated');
       return;
     }
     const nameMatch = args.match(/^(\d+)\s+(.+)$/);
@@ -152,7 +173,7 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
     const qty = Number(nameMatch[1]);
     const name = (nameMatch[2] ?? '').trim();
     if (qty === 0) await ctx.reply(`🗑 מסיר "${name}" מהעגלה...`);
-    await setQty(name, qty);
+    await adapter.setQty(name, qty);
     await ctx.reply(
       qty === 0 ? `✅ "${name}" הוסר מהעגלה.` : `✅ עודכן: "${name}" → x${qty}`,
     );
@@ -186,15 +207,16 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
         return;
       }
       const { sku, name } = session.pendingCartEdit;
+      const adapter = getAdapter(session.store);
       session.pendingCartEdit = undefined;
       await stateStore.put(session);
       if (qty === 0) {
         await ctx.reply(`🗑 מסיר "${name}" מהעגלה...`);
-        await removeFromCart(sku);
+        await adapter.removeFromCart(sku);
         await ctx.replyWithHTML(`✅ "${name}" הוסר מהעגלה.`);
       } else {
         await ctx.reply(`🔄 מעדכן "${name}" → x${qty}...`);
-        await setQty(sku, qty);
+        await adapter.setQty(sku, qty);
         await ctx.replyWithHTML(`✅ עודכן: <b>${name}</b> → x${qty}`);
       }
 
@@ -218,9 +240,10 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
       }
       session.pendingCustomQty = undefined;
       await stateStore.put(session);
+      const adapter = getAdapter(session.store);
       await ctx.replyWithHTML(`🔄 מוסיף לעגלה: <b>${product.name}</b> × ${qty}…`);
       try {
-        const badge = await addToCart(product, qty);
+        const badge = await adapter.addToCart(product, qty);
         await ctx.replyWithHTML(
           `✅ נוסף לעגלה!\n<b>${product.name}</b> × ${qty} — ₪${(product.price * qty).toFixed(2)}\n🛒 סה"כ פריטים בעגלה: <b>${badge}</b>`,
         );
@@ -242,7 +265,7 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
     const adds = items.filter((i) => i.action === 'add');
 
     for (const r of removals) {
-      await handleRemoval(ctx, r);
+      await handleRemoval(ctx, session, r);
     }
     if (adds.length === 0) return;
 
@@ -321,12 +344,24 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
       return;
     }
 
+    // ── Store selection ──────────────────────────────────────────────────
+    if (action === 'store_shufersal' || action === 'store_ramilevy') {
+      const newStore: StoreName = action === 'store_ramilevy' ? 'ramilevy' : 'shufersal';
+      session.store = newStore;
+      await stateStore.put(session);
+      await ctx.answerCbQuery(`✅ עברת ל${STORE_NAMES[newStore]}`);
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
+      await ctx.replyWithHTML(`🏪 <b>חנות פעילה: ${STORE_NAMES[newStore]}</b>\nרשימת קניות תחפש ותוסיף לעגלה של חנות זו.`);
+      return;
+    }
+
     // ── Clear cart: confirmed ────────────────────────────────────────────
     if (action === 'clearcart_yes') {
+      const adapter = getAdapter(session.store);
       await ctx.answerCbQuery('מנקה עגלה…');
       await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
       await ctx.reply('🗑 מנקה את העגלה...');
-      await clearCart();
+      await adapter.clearCart();
       await ctx.replyWithHTML('✅ <b>העגלה נוקתה.</b>');
       return;
     }
@@ -350,7 +385,8 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
     // ── Cart: pick item to edit ──────────────────────────────────────────
     if (action === 'cartedit') {
       const sku = parts[1] ?? '';
-      const cart = await getCart();
+      const adapter = getAdapter(session.store);
+      const cart = await adapter.getCart();
       const line = cart.lines.find((l) => l.sku === sku);
       if (!line) {
         await ctx.answerCbQuery('הפריט לא נמצא בעגלה.');
@@ -372,9 +408,10 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
         await ctx.answerCbQuery('כמות לא תקינה.');
         return;
       }
+      const adapter = getAdapter(session.store);
       await ctx.answerCbQuery(`מעדכן ל-${qty}…`);
       await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
-      await setQty(sku, qty);
+      await adapter.setQty(sku, qty);
       await ctx.replyWithHTML(`✅ עודכן → x${qty}`);
       return;
     }
@@ -382,7 +419,8 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
     // ── Cart: custom qty for existing item ───────────────────────────────
     if (action === 'cartcustom') {
       const sku = parts[1] ?? '';
-      const cart = await getCart();
+      const adapter = getAdapter(session.store);
+      const cart = await adapter.getCart();
       const line = cart.lines.find((l) => l.sku === sku);
       if (!line) {
         await ctx.answerCbQuery('הפריט לא נמצא בעגלה.');
@@ -399,11 +437,12 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
     // ── Cart: remove item ────────────────────────────────────────────────
     if (action === 'cartremove') {
       const sku = parts[1] ?? '';
+      const adapter = getAdapter(session.store);
       await ctx.answerCbQuery('מסיר…');
       await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
-      const cart = await getCart();
+      const cart = await adapter.getCart();
       const line = cart.lines.find((l) => l.sku === sku);
-      await removeFromCart(sku);
+      await adapter.removeFromCart(sku);
       await ctx.replyWithHTML(`✅ "<b>${line?.name ?? sku}</b>" הוסר מהעגלה.`);
       return;
     }
@@ -435,17 +474,18 @@ export function registerHandlers(bot: Telegraf<BotContext>): void {
         return;
       }
       session.pendingPick = undefined;
+      const adapter = getAdapter(session.store);
       await ctx.answerCbQuery(`מוסיף ${qty} × ${product.name}…`);
       await ctx.editMessageReplyMarkup({ inline_keyboard: [] }).catch(() => {});
       await ctx.reply(`🔄 מוסיף לעגלה: <b>${product.name}</b> × ${qty}…`, { parse_mode: 'HTML' });
       try {
-        const badge = await addToCart(product, qty);
+        const badge = await adapter.addToCart(product, qty);
         await ctx.replyWithHTML(
           `✅ נוסף לעגלה!\n<b>${product.name}</b> × ${qty} — ₪${(product.price * qty).toFixed(2)}\n🛒 סה"כ פריטים בעגלה: <b>${badge}</b>`,
         );
       } catch (err) {
         logger.warn({ err }, 'cart.add.error');
-        await ctx.reply('⚠️ לא הצלחתי להוסיף לעגלה. ייתכן שצריך להתחבר לשופרסל — נסה /login');
+        await ctx.reply(`⚠️ לא הצלחתי להוסיף לעגלה. ייתכן שצריך להתחבר — נסה /login`);
       }
       await advanceAndSearchNext(ctx, session);
       return;
@@ -546,11 +586,12 @@ async function searchAndSendItem(ctx: BotContext, session: ChatSession): Promise
 
   const total = session.items.length;
   const current = session.currentIdx + 1;
+  const adapter = getAdapter(session.store);
 
-  await ctx.replyWithHTML(`🔎 [${current}/${total}] מחפש: <b>${item.name}</b>…`);
+  await ctx.replyWithHTML(`🔎 [${current}/${total}] מחפש ב${adapter.displayName}: <b>${item.name}</b>…`);
 
   try {
-    const rawResults = await search(buildQuery(item));
+    const rawResults = await adapter.search(buildQuery(item));
     const ranked = await llmRankResults(item, rawResults);
     const results = ranked?.ordered ?? rawResults;
     const exact = ranked
@@ -657,26 +698,47 @@ async function handleLoginInput(
 
   if (step === 'password') {
     const email = session.pendingLogin?.email ?? '';
+    const store = session.store ?? 'shufersal';
     session.pendingLogin = undefined;
     await stateStore.put(session);
 
-    // Delete the password message from the chat immediately so it doesn't linger.
     await ctx.deleteMessage().catch(() => {});
 
-    await ctx.reply('⏳ מתחבר לשופרסל...');
+    const storeName = STORE_NAMES[store];
+    await ctx.reply(`⏳ מתחבר ל${storeName}...`);
     try {
-      const result = await browserQueue.enqueue('login.credentials', () => loginWithCredentials(email, text));
-      if (result.ok) {
-        await ctx.replyWithHTML('✅ <b>התחברת בהצלחה לשופרסל!</b>');
+      let ok = false;
+      let failReason = '';
+
+      if (store === 'ramilevy') {
+        const result = await rlLoginWithCredentials(email, text);
+        ok = result.ok;
+        if (!result.ok) failReason = result.reason === 'bad_credentials'
+          ? 'המייל או הסיסמא שגויים.'
+          : result.reason === 'nav_failed'
+          ? 'לא הצלחתי לגשת לאתר.'
+          : 'שגיאה בהתחברות.';
       } else {
-        const reasons: Record<string, string> = {
-          nav_failed: 'לא הצלחתי לפתוח את דף ההתחברות.',
-          form_not_found: 'לא מצאתי את שדות המייל/סיסמא בדף.',
-          submit_failed: 'שגיאה בעת שליחת הטופס.',
-          still_logged_out: 'הפרטים לא התקבלו — ייתכן שהמייל או הסיסמא שגויים.',
-        };
+        const result = await browserQueue.enqueue('login.credentials', () =>
+          sfLoginWithCredentials(email, text),
+        );
+        ok = result.ok;
+        if (!result.ok) {
+          const reasons: Record<string, string> = {
+            nav_failed: 'לא הצלחתי לפתוח את דף ההתחברות.',
+            form_not_found: 'לא מצאתי את שדות המייל/סיסמא בדף.',
+            submit_failed: 'שגיאה בעת שליחת הטופס.',
+            still_logged_out: 'הפרטים לא התקבלו — ייתכן שהמייל או הסיסמא שגויים.',
+          };
+          failReason = reasons[result.reason] ?? result.reason;
+        }
+      }
+
+      if (ok) {
+        await ctx.replyWithHTML(`✅ <b>התחברת בהצלחה ל${storeName}!</b>`);
+      } else {
         await ctx.replyWithHTML(
-          `❌ <b>ההתחברות נכשלה.</b>\n${reasons[result.reason] ?? result.reason}\n\nנסה שוב עם /login`,
+          `❌ <b>ההתחברות נכשלה.</b>\n${failReason}\n\nנסה שוב עם /login`,
         );
       }
     } catch (err) {
@@ -687,22 +749,23 @@ async function handleLoginInput(
   }
 }
 
-async function handleRemoval(ctx: BotContext, item: ShoppingItem): Promise<void> {
+async function handleRemoval(ctx: BotContext, session: ChatSession, item: ShoppingItem): Promise<void> {
+  const adapter = getAdapter(session.store);
   if (item.cartIndexRef !== undefined) {
-    const cart = await getCart();
+    const cart = await adapter.getCart();
     const target = cart.lines[item.cartIndexRef - 1];
     if (!target) {
       await ctx.reply(`לא נמצא פריט #${item.cartIndexRef} בעגלה.`);
       return;
     }
     await ctx.reply(`🗑 מסיר "${target.name}" מהעגלה...`);
-    await removeFromCart(target.sku);
+    await adapter.removeFromCart(target.sku);
     await ctx.replyWithHTML(`✅ "${target.name}" הוסר מהעגלה.`);
     return;
   }
   if (item.name) {
     await ctx.reply(`🗑 מסיר "${item.name}" מהעגלה...`);
-    await removeFromCart(item.name);
+    await adapter.removeFromCart(item.name);
     await ctx.replyWithHTML(`✅ "${item.name}" הוסר מהעגלה.`);
   }
 }

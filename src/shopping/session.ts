@@ -1,4 +1,5 @@
 import type { Product, SearchResultBundle, ShoppingItem } from './types.js';
+import type { StoreName } from '../store/adapter.js';
 import { config } from '../config.js';
 
 export const SESSION_SCHEMA_VERSION = 1 as const;
@@ -41,6 +42,7 @@ export interface ChatSession {
   chatId: number;
   createdAt: number;
   updatedAt: number;
+  store: StoreName;
   settings: UserSettings;
   items: ShoppingItem[];
   currentIdx: number;
@@ -58,6 +60,7 @@ export function newSession(chatId: number): ChatSession {
     chatId,
     createdAt: now,
     updatedAt: now,
+    store: 'shufersal',
     settings: defaultSettings(),
     items: [],
     currentIdx: 0,

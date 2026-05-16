@@ -1,0 +1,5 @@
+2026/05/16-23:07:28.569 3003 Creating DB /Users/tal.melamed/Project/Private/shopper/auth-ramilevy/Default/Local Storage/leveldb since it was missing.
+2026/05/16-23:07:28.586 3003 Reusing MANIFEST /Users/tal.melamed/Project/Private/shopper/auth-ramilevy/Default/Local Storage/leveldb/MANIFEST-000001
+2026/05/16-23:07:45.014 3203 Level-0 table #5: started
+2026/05/16-23:07:45.022 3203 Level-0 table #5: 104145 bytes OK
+2026/05/16-23:07:45.029 3203 Delete type=0 #3

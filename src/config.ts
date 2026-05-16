@@ -28,6 +28,8 @@ const schema = z.object({
 
   SHUFERSAL_URL: z.string().url().default('https://www.shufersal.co.il'),
 
+  RAMILEVY_STORE_ID: z.coerce.number().int().positive().default(331),
+
   RESULTS_PER_PAGE: z.coerce.number().int().positive().max(10).default(4),
   MAX_PAGES: z.coerce.number().int().positive().max(10).default(5),
 
